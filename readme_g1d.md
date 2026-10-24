@@ -1,93 +1,60 @@
-# G1-D Integration Notes
+# G1-D 接入说明
 
-## Status
+## 当前状态
 
-This change adds the offline robot interface boundary in `core/g1d/g1d_interface.py`.
-It maps a future G1-D transport to the four methods required by the shared real-arm
-controller. `MockG1DTransport` and `tests/test_g1d_interface.py` verify that contract
-without ROS, SDK access, networking, cameras, or physical motion.
+这次改动在 `core/g1d/g1d_interface.py` 中新增了一个离线接口边界。它规定了未来的 G1-D 通信程序如何向 Show-Harness 提供机械臂状态，并接收控制命令。
+`MockG1DTransport` 和 `tests/test_g1d_interface.py` 可以在不连接 ROS、SDK、网络、相机或真机的情况下检查接口是否接通。
 
-G1-D is intentionally **not** registered as a supported real-hardware option in
-`core/launch.py`. There is no validated G1-D transport implementation or calibrated
-motion configuration in this repository yet. Selecting a G1-D real run must continue to
-fail closed until those pieces are implemented and tested.
+目前**尚未**在 `core/launch.py` 中把 G1-D 注册为可运行的真机类型，因为仓库里还没有经过验证的 G1-D 通信程序和运动标定配置。在这些内容实现并测试完成之前，使用 G1-D 启动真机任务应当报错并停止，不能继续发送命令。
 
-The mock applies a commanded pose immediately. It is only an API and wiring check; it
-does not model G1-D kinematics, joint limits, dynamics, collision behavior, the gripper,
-or camera geometry. The sample widths and pose in the test are mock-only values, not
-robot calibration.
+Mock 会让机械臂位姿在收到命令后立即变化。它只用于检查软件接口是否连通，不模拟 G1-D 的运动学、关节限位、动力学、碰撞、夹爪或相机。测试中的位姿和夹爪宽度只是模拟数据，不能当作真机标定值。
 
-## Interface Contract
+## 接口约定
 
-A transport implementation must provide these operations:
+未来的 G1-D 通信程序需要提供以下操作：
 
-| Transport method | Meaning |
+| 操作 | 含义 |
 | --- | --- |
-| `connect()` / `close()` | Start and release transport resources |
-| `read_end_effector_pose()` | Measured base-frame pose `[x, y, z, qx, qy, qz, qw]`, meters |
-| `read_gripper_width_m()` | Measured gripper opening in meters |
-| `command_end_effector_pose(pose7)` | Send a Cartesian target in the same base frame |
-| `command_gripper(closed)` | Close or open the active gripper |
+| `connect()` / `close()` | 建立连接并释放连接资源 |
+| `read_end_effector_pose()` | 读取实测末端位姿，格式为基座坐标系下的 `[x, y, z, qx, qy, qz, qw]`，长度单位为米 |
+| `read_gripper_width_m()` | 读取实测夹爪开口宽度，单位为米 |
+| `command_end_effector_pose(pose7)` | 在同一个基座坐标系下发送末端目标位姿 |
+| `command_gripper(closed)` | 命令当前选中的夹爪闭合或张开 |
 
-The adapter validates finite pose values, nonzero quaternions, and nonnegative finite
-gripper widths. It normalizes quaternions before passing them to the controller or
-transport. A future ROS 2 client should implement `G1DTransport` and own the conversion
-to the actual action, topic, or SDK messages. It must return measured feedback rather
-than echoing commanded targets.
+适配层会检查位姿数值是否有效、四元数是否非零，以及夹爪宽度是否为有效的非负数。发送给控制器或通信程序之前，它会把四元数归一化。未来的 ROS 2 客户端需要实现 `G1DTransport`，并负责把这些标准化数据转换成实际使用的 ROS 2 action、topic 或 SDK 消息。读取状态时必须返回传感器反馈，不能直接把刚发送的目标值当作实测状态返回。
 
-The shared controller expects a single controlled end effector. A dual-arm setup needs
-an explicit arm selector and separate state/command routing; it must not silently send
-commands to a default arm.
+当前通用控制器一次控制一个末端。双臂接入时，必须明确选择左臂或右臂，并分别读取和发送对应的状态与命令，不能悄悄把命令发给默认手臂。
 
-## Files Added or Relevant
+## 新增文件与参考文件
 
-- `core/g1d/__init__.py`: package exports.
-- `core/g1d/g1d_interface.py`: transport protocol, validated adapter, and in-memory mock.
-- `tests/test_g1d_interface.py`: offline adapter and shared-controller tests.
-- `interpreters/real_atomic_controller.py`: existing transport-independent Cartesian
-  action integration and safety floor.
-- `interpreters/README.md`: existing real-arm controller contract.
-- `core/piper/piper_session.py` and `core/piper/ros_camera.py`: examples of the current
-  robot-session and RGB camera contracts. They are references, not G1-D dependencies.
-- `core/launch.py`: current hardware factory. G1-D is not enabled there yet.
+- `core/g1d/__init__.py`：导出 G1-D 接口类。
+- `core/g1d/g1d_interface.py`：定义通信接口、数据检查、接口适配层和内存模拟器。
+- `tests/test_g1d_interface.py`：不连接 ROS 或真机的接口和通用控制器测试。
+- `interpreters/real_atomic_controller.py`：已有的通用笛卡尔运动控制器，负责动作转换和 Z 方向安全下限。
+- `interpreters/README.md`：已有的真机控制器接口约定。
+- `core/piper/piper_session.py` 和 `core/piper/ros_camera.py`：现有机器人会话及 RGB 相机接口的参考实现。它们仅供参考，不是 G1-D 的依赖。
+- `core/launch.py`：现有硬件启动和实例创建入口，目前尚未启用 G1-D。
 
-## Offline Verification
+## 离线测试
 
-From the repository root:
+在仓库根目录运行：
 
 ```bash
 python -m pytest tests/test_g1d_interface.py
 ```
 
-The test exercises pose/gripper reads, command forwarding, connection checks, invalid
-feedback rejection, and one shared-controller translation plus grasp. It does not
-verify transport timing, ROS 2 QoS, action cancellation, camera delivery, or hardware
-safety.
+测试会检查位姿和夹爪状态读取、命令转发、连接状态检查、无效反馈拦截，以及通用控制器的一次平移和抓取动作。测试**不会**检查通信时序、ROS 2 QoS、运动取消、相机数据或真机安全性。
 
-## Work Needed Before Real-Robot Integration
+## 接入真机前还要完成的工作
 
-1. Confirm the controlled arm and end-effector frame, the base frame, and the exact
-   measured pose source. Verify quaternion order, units, and timestamp/staleness behavior.
-2. Confirm which G1-D motion interface the lab will support for Cartesian targets and
-   how an in-flight command is stopped or canceled. Implement that as a separate
-   `G1DTransport`; do not import or alter another workspace's bringup code from here.
-3. Confirm the gripper command API, calibrated open/closed widths, feedback meaning, and
-   empty-grasp behavior. Add explicit configuration instead of borrowing Franka/Piper
-   thresholds.
-4. Identify front and wrist RGB topics, encodings, frame transforms, resolution, and
-   freshness limits. Build and test a session that returns `agentview`, `wrist`,
-   `ee_pose`, and `gripper_width` in the existing observation contract.
-5. Measure each atomic direction and yaw sign with the arm under an operator-controlled
-   low-speed procedure. Create `configs/primitives_g1d.yaml`; do not copy another arm's
-   axis signs or step sizes without verification.
-6. Add an explicit G1-D session/controller/config route to `core/launch.py`, guarded by
-   mock-only defaults until transport and calibration are reviewed. Add dry-run tests
-   for config selection and real-mode refusal before enabling any hardware path.
-7. Only after the lab validates the bridge: check workspace limits, collision settings,
-   emergency stop, command timeout, watchdog behavior, and arm-select routing before a
-   supervised low-speed test.
+1. 确认要控制哪条手臂、末端坐标系和基座坐标系，以及从哪里读取实测位姿；核对四元数顺序、单位、时间戳和数据过期判断方式。
+2. 确认实验室用于发送笛卡尔目标的 G1-D 控制接口，以及如何停止或取消正在执行的命令。把它实现为单独的 `G1DTransport`；不要从这里导入或修改其他工作区的 bringup（机器人启动配置）代码。
+3. 确认夹爪控制接口、实测反馈的含义、空抓判断方法，并在真机上标定张开和闭合宽度。不要直接沿用 Franka 或 Piper 的阈值，应在 G1-D 配置中明确填写。
+4. 确认外部相机和腕部相机的 RGB topic、图像编码、坐标变换、分辨率和数据新鲜度限制。实现并测试一个会话接口，使其按现有约定返回 `agentview`、`wrist`、`ee_pose` 和 `gripper_width`。
+5. 在人员现场控制和低速操作的条件下，逐一测量各个动作方向与旋转方向。测量完成后再创建 `configs/primitives_g1d.yaml`；不要未经验证就复制其他机械臂的方向符号或步长。
+6. 在 `core/launch.py` 中为 G1-D 增加明确的会话、控制器和配置分支。通信程序和标定通过审查前，默认只允许 mock；同时添加测试，确认配置选择正确，并且真机模式会被拒绝。
+7. 实验室验证通信桥后，在现场监督的低速测试前，检查工作空间限制、碰撞设置、急停、命令超时、看门狗和左右臂选择是否正确。
 
-## Local Test Command
+## 本地测试命令
 
-`python -m pytest tests/test_g1d_interface.py` is safe to run offline. Do not use this
-mock as evidence that an autonomous real-arm rollout is ready.
+`python -m pytest tests/test_g1d_interface.py` 可以离线运行。mock 测试通过并不代表自动控制真机已经准备就绪。
