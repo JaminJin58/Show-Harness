@@ -6,7 +6,6 @@ import io
 from pathlib import Path
 from typing import Optional, Sequence
 
-import imageio.v2 as imageio
 import numpy as np
 from PIL import Image
 
@@ -219,6 +218,12 @@ class StreamingVideoWriter:
         frame = to_uint8_hwc(frame)
         if self._writer is None:
             self.live_path.parent.mkdir(parents=True, exist_ok=True)
+            # imageio is only needed for video writing, so it is imported HERE rather
+            # than at module scope: the VLM client imports this module just for
+            # image_to_data_url, and on an offline box without imageio that import
+            # used to fail for a reason unrelated to the request.
+            import imageio.v2 as imageio
+
             self._writer = imageio.get_writer(
                 self.live_path,
                 fps=self.fps,

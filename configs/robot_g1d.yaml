@@ -1,0 +1,74 @@
+# G1-D (Unitree G1-D dual-arm humanoid) robot configuration.
+#
+# Two independent layers live here:
+#
+#   1. The VISION API block -- the camera -> VLM -> JSON path, which is
+#      perception only and never sends a robot command.
+#   2. The MOTION blocks (primitives_config / hardware) -- the G1-D Cartesian
+#      adapter, still under construction. See readme_g1d.md for what is and is
+#      not verified on hardware.
+#
+# The VLM credentials live in configs/secrets.env (gitignored), never in this
+# file. The gateway is the deployment one; the harness's own backends work too.
+#
+# ----- Task -----------------------------------------------------------------
+task: "Locate the steel bearing on the workbench and report its bounding box"
+
+# ----- Vision API ----------------------------------------------------------
+# transport: openai_compat | custom
+#   openai_compat -> the standard vlm / vlm_backends blocks below (any
+#                     OpenAI-compatible /chat/completions endpoint).
+#   custom         -> the vision_api block's own request_template, for a
+#                     gateway that does not speak the OpenAI dialect.
+vision_api:
+  transport: openai_compat
+  # A detection below this confidence is reported as "not found" rather than
+  # as a low-confidence hit.
+  min_confidence: 0.5
+  # Downscale frames so the longest side is at most this many pixels (0 = keep
+  # the native resolution). Set this if the gateway rejects large bodies.
+  max_image_side: 0
+  max_tokens: 512
+
+# ----- VLM ------------------------------------------------------------------
+vlm_backend: gateway   # see vlm_backends below
+
+vlm:
+  base_url: http://localhost:8000/v1
+
+vlm_backends:
+  gateway:
+    provider: openai
+    base_url: https://api.openai.com/v1
+    model: gpt-5.5
+    api_key_env: G1D_VLM_API_KEY
+    max_tokens: 512
+    temperature: 0.0
+    max_retries: 5
+  gemini:
+    provider: gemini
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    model: gemini-3.1-pro
+    api_key_env: GEMINI_API_KEY
+    max_tokens: 512
+    temperature: 0.0
+    max_retries: 5
+  local:
+    provider: vllm
+    base_url: http://localhost:8000/v1
+    model: gemma-3-27b-it
+    api_key_env: VLLM_API_KEY
+    max_tokens: 512
+    temperature: 0.0
+
+# ----- Hardware target --------------------------------------------------------
+# !! The G1-D motion stack is NOT wired up yet. Do not enable it. !!
+hardware: g1d
+primitives_config: configs/primitives_g1d.yaml
+
+# ----- Camera topics (used by scripts/g1d/vision_detect.py) ------------------
+camera_topics:
+  head_left: /g1d/cameras/head_left/image_raw
+  head_right: /g1d/cameras/head_right/image_raw
+  left_wrist: /g1d/cameras/left_wrist/image_raw
+  right_wrist: /g1d/cameras/right_wrist/image_raw
