@@ -65,6 +65,7 @@ from core.g1d.geometry import (
 )
 from core.g1d.inverse_kinematics import ArmInverseKinematics
 from core.g1d.kinematics import ArmKinematics, arm_joint_names, tcp_to_wrist_pose7
+from core.g1d.safety import ZFloor
 from core.g1d.single_arm import SingleArmProfile
 
 
@@ -158,6 +159,7 @@ class G1DRosTransport:
         feedback_max_age_s: float = 0.5,
         velocity_scaling: float = 0.1,
         dry_run: bool = True,
+        z_floor: Optional[ZFloor] = None,
         verbose: bool = True,
     ) -> None:
         """
@@ -181,6 +183,11 @@ class G1DRosTransport:
             dry_run: When True, trajectories are PLANNED and validated but never
                 SENT for execution. This is the default: the harness must not
                 move a real arm without an explicit opt-in.
+            z_floor: The minimum end-effector height guard (see
+                :mod:`core.g1d.safety`). When enabled, every planned trajectory
+                is checked against it BEFORE it can be sent, and a Cartesian
+                target below the floor is clamped. ``None`` means NO floor --
+                only acceptable in a dry-run; a live run must pass one.
             verbose: Print progress lines.
         """
         self.profile = profile
@@ -197,6 +204,14 @@ class G1DRosTransport:
         self.velocity_scaling = float(velocity_scaling)
         self.dry_run = bool(dry_run)
         self.verbose = bool(verbose)
+        self.z_floor = z_floor
+        if not self.dry_run and (z_floor is None or not z_floor.enabled):
+            raise ValueError(
+                "a live G1-D run needs an enabled z-floor: the arm's commanded height "
+                "must have a lower bound so it cannot be driven into the table. "
+                "Pass a core.g1d.safety.ZFloor (calibrate the height with "
+                "scripts/g1d/capture_z_floor.py), or keep dry_run=True."
+            )
         self._ros = _require_ros()
         self._node: Any = None
         self._executor: Any = None
@@ -392,11 +407,26 @@ class G1DRosTransport:
         wrist link, so the target is converted to the wrist frame first and the
         measured wrist pose is converted back, so the command is expressed in
         exactly the frame the harness reports.
+
+        The z-floor is applied in TWO places, because either alone is
+        insufficient:
+
+        1. the Cartesian TARGET is clamped, so a goal below the floor becomes a
+           goal AT the floor instead of a hopeless plan;
+        2. the resulting TRAJECTORY is verified (every sampled configuration is
+           forward-kinematics'd and its TCP height compared), because a valid
+           target can still be reached by a path that dips through the table.
         """
         self._require_connected("command_end_effector_pose")
         target = np.asarray(pose7, dtype=float).reshape(-1)
         if target.size != 7 or not np.all(np.isfinite(target)):
             raise G1DTransportError("command pose must be 7 finite values")
+        target, clamped = self._clamp_target(target)
+        if clamped and self.verbose:
+            print(
+                f"[g1d-transport] z-floor: target height clamped to "
+                f"{target[2]:.4f} m ({self.z_floor.describe() if self.z_floor else 'off'})"
+            )
         start = self.read_joint_positions()
         trajectory = self.build_trajectory(target, start)
         self._last_commanded_pose = target.copy()
@@ -408,6 +438,29 @@ class G1DRosTransport:
                 )
             return
         self._send_trajectory(trajectory)
+
+    def _clamp_target(self, target: np.ndarray) -> tuple[np.ndarray, bool]:
+        """Apply the z-floor to a Cartesian target (no-op when disabled)."""
+        if self.z_floor is None or not self.z_floor.enabled:
+            return target, False
+        clamped, was_clamped = self.z_floor.clamp_pose7(target)
+        return clamped, was_clamped
+
+    def check_z_floor(self, trajectory: TrajectoryData) -> str | None:
+        """Verify a planned trajectory against the z-floor.
+
+        Returns ``None`` when the trajectory stays above the floor, else the
+        reason it must not be sent.
+        """
+        if self.z_floor is None or not self.z_floor.enabled:
+            return None
+        return self.z_floor.check_trajectory(
+            trajectory.positions,
+            self._kin,
+            times_s=trajectory.times_s,
+            velocities=trajectory.velocities,
+            joint_names=trajectory.joint_names,
+        )
 
     def command_gripper(self, closed: bool) -> None:
         """Command the selected side's Dex1 to open or close.
@@ -615,7 +668,15 @@ class G1DRosTransport:
         )
 
     def _guard(self, data: TrajectoryData, start_joints: Sequence[float]) -> None:
-        """Apply the bridge's own acceptance rules to the trajectory."""
+        """Apply the bridge's own acceptance rules to the trajectory.
+
+        The z-floor is checked HERE, not only at the command site, because
+        ``_guard`` is the single choke point every trajectory passes through
+        (both the MoveIt path and the local-IK path call it). A trajectory that
+        would put the hand below the calibrated floor is rejected before it can
+        reach the bridge -- so no future caller can bypass the guard by
+        building a trajectory differently.
+        """
         structure = validate_trajectory_structure(data, self._joint_names)
         if structure is not None:
             raise G1DTransportError(f"the bridge would reject this trajectory: {structure}")
@@ -629,11 +690,19 @@ class G1DRosTransport:
         )
         if not report.ok:
             raise G1DTransportError(f"the bridge would reject this trajectory: {report.reason}")
+        floor_problem = self.check_z_floor(data)
+        if floor_problem is not None:
+            raise G1DTransportError(
+                f"the z-floor rejects this trajectory: {floor_problem}"
+            )
         self.last_trajectory = {
             "points": report.points,
             "duration_s": report.duration_s,
             "peak_speed_rad_s": report.max_speed_rad_s,
             "start_error_rad": report.max_start_error_rad,
+            "z_floor_m": (
+                self.z_floor.z_m if (self.z_floor and self.z_floor.enabled) else None
+            ),
         }
         if self.verbose:
             print(f"[g1d-transport] {report.summary()}")

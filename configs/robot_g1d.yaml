@@ -31,12 +31,33 @@ vision_api:
   max_tokens: 512
 
 # ----- VLM ------------------------------------------------------------------
-vlm_backend: gateway   # see vlm_backends below
+# The default backend is the OpenAI-compatible relay below. It speaks the
+# standard /chat/completions dialect, which is what core/vlm/vlm_client.py uses.
+#
+# NOTE on the relay: it sits behind Cloudflare, which rejects DIRECT requests
+# from this machine with HTTP 403. The proxy settings live in
+# configs/secrets.local.env (gitignored) so that the harness's requests
+# library picks them up:
+#
+#     HTTPS_PROXY="http://127.0.0.1:7890"
+#     HTTP_PROXY="http://127.0.0.1:7890"
+#
+# The relay's /v1/responses endpoint is NOT available (it hangs/errors); only
+# /v1/chat/completions works. That is exactly the dialect the harness uses.
+vlm_backend: inroi   # see vlm_backends below
 
 vlm:
   base_url: http://localhost:8000/v1
 
 vlm_backends:
+  inroi:
+    provider: openai
+    base_url: https://www.inroi.shop/v1
+    model: gpt-5.6-sol
+    api_key_env: G1D_VLM_API_KEY
+    max_tokens: 512
+    temperature: 0.0
+    max_retries: 5
   gateway:
     provider: openai
     base_url: https://api.openai.com/v1
@@ -65,6 +86,26 @@ vlm_backends:
 # !! The G1-D motion stack is NOT wired up yet. Do not enable it. !!
 hardware: g1d
 primitives_config: configs/primitives_g1d.yaml
+
+# ----- Safety: the Z floor -----------------------------------------------------
+# The minimum end-effector height (meters, in `torso_link`) the arm may be driven
+# to. The commanded target is CLAMPED to this height, and every planned
+# trajectory is checked sample-by-sample against it, so a path that dips through
+# the table is rejected before it reaches the SDK bridge.
+#
+# `z_floor_m: 0.0` is a PLACEHOLDER, not a real value: it must be measured on
+# YOUR table. Calibrate it (read-only, the arm never moves):
+#
+#     python3 scripts/g1d/capture_z_floor.py --side left --capture
+#
+# then paste the measured height here. A live run refuses to start without an
+# enabled floor -- see core/g1d/safety.py.
+enable_z_floor: true
+z_floor_m: 0.0
+# Extra clearance for the HAND (the Dex1 fingers extend behind/below the
+# fingertip midpoint, so a floor exactly at the TCP height still lets the
+# fingers touch the table). Added ON TOP of z_floor_m.
+z_floor_margin_m: 0.003
 
 # ----- Camera topics (used by scripts/g1d/vision_detect.py) ------------------
 camera_topics:
