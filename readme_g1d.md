@@ -4,6 +4,20 @@
 
 当前迁移目标限定为 **一侧手臂的 7 个关节 + 同侧 Dex1 夹爪**。躯干、头部、底盘和另一侧手臂不作为控制目标。其他关节状态仍可作为只读机器人状态提供给 MoveIt 的环境模型。
 
+## 2026-10-26 现场验证结果
+
+今天已完成 G1-D 单臂从 Harness 到 MoveIt 再到 SDK Action 的基本运动闭环验证：
+
+- 使用 `/home/yushu/harness_lzh` 作为 Harness 工作区。
+- 通过 `scripts/g1d/pose_goal.py` 选择左臂 `left_arm`，读取 7 个关节状态并请求 MoveIt 规划。
+- 使用语义动作 `MV_UP` 对应的运动含义：TCP 在 `torso_link` 坐标系沿 `+Z` 上移。
+- 已实际验证 5 mm 和 10 mm 单步轨迹；MoveIt 返回轨迹完成成功。
+- 单步脚本现支持一次最多 50 mm 的平移；使用 `--step-base-z 0.050` 可一次规划 5 cm 上移，默认仍需 `--execute` 和交互输入 `YES` 才执行。
+- 当前左臂 TCP：`left_dex1_tcp_link`；右臂 TCP：`right_dex1_tcp_link`。
+- Dex1 结构以官方 `/home/yushu/dex1_1_service/urdf/dex1_1.urdf` 为准。TCP 偏移使用官方 URDF 链计算值：`(0.0848215, 0.00125825, -0.0005)` m，方向为腕系 `+X`；不使用此前的 15 cm 假设。
+
+这证明了“单臂语义位移 → TCP 目标 → MoveIt 轨迹 → 执行 Action”的基本运动链路。它不等于已经完成自主抓取：深度、相机到机器人外参、夹爪开口标定和完整视觉闭环仍需单独验证。
+
 建议技术分工：
 
 ```text
@@ -25,10 +39,10 @@ MoveIt 2 是本项目第一阶段的规划核心。师兄当前配置已经使�
 - `core/g1d/vision_api.py`：相机图片 → 大模型 → JSON 结果的 API 层。两种 transport：`openai_compat` 复用仓库现有 `core/vlm/vlm_client.py`（provider 方言、限流重试、密钥刷新全部继承）；`custom` 按字段模板 POST 到任意 HTTP 接口并按点号路径取回结果。负责图片编码、prompt、JSON 校验和"目标不可见"的约定。
 - `core/g1d/camera_source.py`：订阅相机桥话题并给出**新鲜** RGB 帧。桥发布的是 `bgr8`，这里统一转成 RGB；每帧检查时效，冻结画面会报错而不是给出一个看似合理的检测结果。ROS 导入是惰性的，离线环境导入本模块不报错。
 - `scripts/g1d/vision_detect.py`：视觉 API 的命令行入口。取一帧 → 调 API → 打印一行 JSON。**不做深度、不读 TF、不发机器人命令**，输出里 `action_sent` 恒为 `false`。
-- `configs/robot_g1d.yaml`：G1-D 配置。`vision_api` 段描述 API 端点；`vlm` / `vlm_backends` 段沿用全仓库统一的凭据与模型选择方式。
+- `configs/robot_g1d.yaml`：G1-D 配置。`vision_api` 段描述 API 端点；`vlm` / `vlm_backends` 段沿用全仓库统一的凭据与模型选择方式。Z 安全限位段 `z_floor_m: 0.0` + `z_floor_calibrated: true` 是**实测值**：G1-D 的桌面与 `torso_link` 的 Z 原点基本齐平，所以实测桌面高度就是 0.0 m；`z_floor_calibrated` 标记把它与"未标定的 0.0 占位符"区分开（未标定的 0.0 仍会被拒绝启动真机 run）。
 - `tests/test_g1d_vision_api.py`：视觉 API 层测试（不需要网络、密钥或 ROS）。
 - `scripts/g1d/inspect_target.py`：按固定最大频率订阅新鲜 RGB 图并调用仓库现有 VLM API；提供标定文件时检查左右同步时间戳、CameraInfo，并输出深度和左相机光学坐标。它不会发送机器人命令。
-- `scripts/g1d/pose_goal.py`：向现有 `/plan_kinematic_path` 请求单臂末端位姿规划；规划为默认模式；只有加 `--execute` 并在终端输入 `YES` 才请求 `/execute_trajectory`。脚本不会发布 Unitree LowCmd。
+- `scripts/g1d/pose_goal.py`：向现有 `/plan_kinematic_path` 请求单臂末端位姿规划；支持 `--step-tool-x` 和 `--step-base-z`；规划为默认模式；只有加 `--execute` 并在终端输入 `YES` 才请求 `/execute_trajectory`。脚本不会发布 Unitree LowCmd。
 - `scripts/g1d/gripper_goal.py`：只请求显式选择的一侧夹爪 Action；只有加 `--send` 并输入 `YES` 才发送。开口单位为米。
 - `tests/test_g1d_vision_geometry.py`：不连接 ROS 或真机的数学、输入格式和单臂选择测试。
 - `docs/G1D_FIELD_CHECKLIST_2026-10-25.md`：2026-10-25 现场操作与信息采集步骤。
@@ -47,15 +61,30 @@ python3 scripts/g1d/vision_detect.py --help
 
 ## 尚未接通的部分
 
-当前代码是可检查的接入骨架，不代表 RGB-D 到真机运动已经完成：
+当前代码已打通单臂小步 MoveIt 运动链，但 RGB-D 到自主抓取仍有边界：
 
 1. 相机桥发布左右图像和 `CameraInfo`，不发布深度图。新增的 `StereoDepthProcessor` 可以在**提供有效、实测、与当前图像分辨率匹配的标定文件后**生成深度；当前还没有 G1-D 相机的已验证标定文件。
 2. 相机标定、双目同步和基线数据必须现场核验。桥的时间戳是接收时间；代码不推断相机到机器人的 TF。
 3. 相机到 `torso_link` 的外参必须测量或标定；如果相机随头部运动，需要动态 TF。当前不能用未经确认的变换生成实机目标。
-4. URDF/SRDF 当前规划末端是 `*_wrist_yaw_link`，不是已标定的夹爪 TCP。`pose_goal.py --tip-link` 必须给出 URDF 中真实存在、且 MoveIt 可规划的链接。先用腕部链接只能检查规划链，不能声称到达了夹爪尖端。
+4. URDF/SRDF 当前规划末端是 `left_dex1_tcp_link` / `right_dex1_tcp_link`。它们是由官方 Dex1 URDF 链计算出的两指尖中点 TCP；Harness 的 TCP 换算也使用同一官方偏移。
 5. 当前 SDK Action 服务端同时提供左右手臂和左右夹爪接口。Harness 的 `SingleArmProfile` 和客户端只发选定侧命令，但**服务端目前没有选边白名单**；开全局实机开关后，另一个侧的 Action 也仍可接受命令。需要在实际运行的 SDK 桥内落实侧向白名单后，才算底层只开放一侧。不能同时运行两个 Unitree LowCmd 写入者。
 6. 视觉 API 层（相机 → 大模型 → JSON）已经接通并可独立运行，见上文"视觉 API 层"一节；但检测结果还没有自动送给 `pose_goal.py`，相机到基座的变换也只在显式提供并验证 `--base-frame` 时读取 TF。整个视觉流程不会自动触发运动。
 7. Dex1 电机角度到实际夹爪开口的关系仍需实机校准。现有 0–0.09 m 是接口名义范围，不是已完成的夹爪宽度/力标定。
+
+### 已验证的单步上移命令
+
+```bash
+cd /home/yushu/harness_lzh
+python3 scripts/g1d/pose_goal.py \
+  --side left \
+  --base-frame torso_link \
+  --tip-link left_dex1_tcp_link \
+  --step-base-z 0.050 \
+  --max-translation-m 0.050 \
+  --execute
+```
+
+该命令一次规划 5 cm 的 TCP 上移；执行前必须确认急停、人员和路径安全，并在程序提示时输入 `YES`。复位同样使用 `--step-base-z -0.050`，前提是期间没有其他运动。
 
 ## VLM 与 RGB-D 数据约定
 

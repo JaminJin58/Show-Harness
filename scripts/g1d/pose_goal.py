@@ -290,6 +290,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--step-tool-x", type=float,
         help="small translation along current tool +X, meters",
     )
+    target.add_argument(
+        "--step-base-z", type=float,
+        help="small translation along base-frame +Z, meters",
+    )
     parser.add_argument("--max-translation-m", type=float, default=0.01)
     parser.add_argument("--position-tolerance-m", type=float, default=0.01)
     parser.add_argument("--orientation-tolerance-rad", type=float, default=0.08)
@@ -301,8 +305,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if not math.isfinite(args.max_translation_m) or not 0 < args.max_translation_m <= 0.01:
-        parser.error("--max-translation-m must be in (0, 0.01] meters")
+    if not math.isfinite(args.max_translation_m) or not 0 < args.max_translation_m <= 0.05:
+        parser.error("--max-translation-m must be in (0, 0.05] meters")
     if not 0 < args.position_tolerance_m <= 0.05:
         parser.error("--position-tolerance-m must be in (0, 0.05] meters")
     if not 0 < args.orientation_tolerance_rad <= 0.5:
@@ -311,8 +315,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--max-rotation-rad must be in (0, 0.10] radians")
     if not 0 < args.velocity_scaling <= 0.1:
         parser.error("--velocity-scaling must be in (0, 0.1]")
-    if args.step_tool_x is not None and abs(args.step_tool_x) > args.max_translation_m:
-        parser.error("requested tool step exceeds --max-translation-m")
+    for name, value in (("--step-tool-x", args.step_tool_x), ("--step-base-z", args.step_base_z)):
+        if value is not None and abs(value) > args.max_translation_m:
+            parser.error(f"{name} exceeds --max-translation-m")
 
     profile = SingleArmProfile(args.side)
     rclpy.init(args=None)
@@ -328,9 +333,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 current_pose.orientation.x, current_pose.orientation.y,
                 current_pose.orientation.z, current_pose.orientation.w,
             ]
-            values = translate_pose_in_tool_axis(
-                current, args.step_tool_x, axis="x", max_step_m=args.max_translation_m
-            )
+            if args.step_base_z is not None:
+                values = list(current)
+                values[2] += args.step_base_z
+            else:
+                values = translate_pose_in_tool_axis(
+                    current, args.step_tool_x, axis="x", max_step_m=args.max_translation_m
+                )
             target_pose = _pose_from_args(values)
         translation = math.dist(
             (current_pose.position.x, current_pose.position.y, current_pose.position.z),
