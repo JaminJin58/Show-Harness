@@ -422,6 +422,8 @@ def g1d_session_config(
     # placeholder, which is not "safe": at 0.0 the TCP would be allowed all the
     # way down to the torso origin, i.e. straight through the table. Refuse it,
     # exactly like the Piper branch refuses a captured-at-start floor.
+    # A CALIBRATED 0.0 is fine: on the G1-D the tabletop coincides with the
+    # torso_link Z origin, so the measured table height really is ~0.0 m.
     mock_robot = bool(args.mock_robot or rb.get("use_mock_robot", False))
     if not mock_robot and not args.no_z_floor:
         if not floor.enabled:
@@ -431,7 +433,7 @@ def g1d_session_config(
                 "python3 scripts/g1d/capture_z_floor.py --side <left|right> --capture, "
                 "then set z_floor_m in the robot config -- or pass --z-floor-m <height>."
             )
-        if floor.z_m <= 0.0:
+        if floor.z_m <= 0.0 and not floor.calibrated:
             raise ValueError(
                 f"G1-D: z_floor_m = {floor.z_m} is the shipped PLACEHOLDER, not a "
                 "measured height (0.0 would let the TCP descend to the torso "

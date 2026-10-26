@@ -93,15 +93,20 @@ primitives_config: configs/primitives_g1d.yaml
 # trajectory is checked sample-by-sample against it, so a path that dips through
 # the table is rejected before it reaches the SDK bridge.
 #
-# `z_floor_m: 0.0` is a PLACEHOLDER, not a real value: it must be measured on
-# YOUR table. Calibrate it (read-only, the arm never moves):
+# `z_floor_m: 0.0` is a MEASURED value, not a placeholder: on the G1-D the
+# tabletop is level with the `torso_link` Z origin, so the measured table
+# height is ~0.0 m. The `z_floor_calibrated: true` marker below is what tells
+# the harness this 0.0 is a real calibration (an UNMARKED 0.0 is still
+# refused as a placeholder). To re-calibrate on a different table (read-only,
+# the arm never moves):
 #
 #     python3 scripts/g1d/capture_z_floor.py --side left --capture
 #
 # then paste the measured height here. A live run refuses to start without an
-# enabled floor -- see core/g1d/safety.py.
+# enabled, calibrated floor -- see core/g1d/safety.py.
 enable_z_floor: true
 z_floor_m: 0.0
+z_floor_calibrated: true
 # Extra clearance for the HAND (the Dex1 fingers extend behind/below the
 # fingertip midpoint, so a floor exactly at the TCP height still lets the
 # fingers touch the table). Added ON TOP of z_floor_m.

@@ -207,6 +207,48 @@ class ResolveZFloorTests(unittest.TestCase):
         )
         self.assertAlmostEqual(floor.effective_z_m, 0.41, places=9)
 
+    def test_zero_is_uncalibrated_by_default(self) -> None:
+        floor = resolve_z_floor({"enable_z_floor": True, "z_floor_m": 0.0})
+        self.assertAlmostEqual(floor.z_m, 0.0, places=9)
+        self.assertFalse(floor.calibrated)
+
+    def test_calibrated_zero_is_accepted(self) -> None:
+        floor = resolve_z_floor(
+            {"enable_z_floor": True, "z_floor_m": 0.0, "z_floor_calibrated": True}
+        )
+        self.assertAlmostEqual(floor.z_m, 0.0, places=9)
+        self.assertTrue(floor.calibrated)
+        self.assertTrue(floor.enabled)
+
+    def test_calibrated_zero_keeps_the_hand_clearance(self) -> None:
+        floor = resolve_z_floor(
+            {
+                "enable_z_floor": True,
+                "z_floor_m": 0.0,
+                "z_floor_calibrated": True,
+                "z_floor_margin_m": 0.003,
+            }
+        )
+        self.assertAlmostEqual(floor.effective_z_m, 0.003, places=9)
+
+    def test_override_is_always_calibrated(self) -> None:
+        floor = resolve_z_floor({"z_floor_m": 0.0}, override_m=0.0)
+        self.assertTrue(floor.calibrated)
+
+    def test_describe_flags_an_uncalibrated_floor(self) -> None:
+        uncal = resolve_z_floor({"enable_z_floor": True, "z_floor_m": 0.0})
+        self.assertIn("UNCALIBRATED", uncal.describe())
+        cal = resolve_z_floor(
+            {"enable_z_floor": True, "z_floor_m": 0.0, "z_floor_calibrated": True}
+        )
+        self.assertNotIn("UNCALIBRATED", cal.describe())
+
+    def test_describe_does_not_flag_a_positive_floor(self) -> None:
+        # A nonzero height is a measured value by construction; the absence of
+        # the marker must not label it as a placeholder.
+        floor = resolve_z_floor({"enable_z_floor": True, "z_floor_m": 0.42})
+        self.assertNotIn("UNCALIBRATED", floor.describe())
+
 
 if __name__ == "__main__":
     unittest.main()

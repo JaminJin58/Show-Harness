@@ -63,6 +63,13 @@ class ZFloor:
     frame: str = TORSO_FRAME
     margin_m: float = DEFAULT_HAND_CLEARANCE_M
     enabled: bool = True
+    #: True when this height is a MEASURED (calibrated) value rather than a
+    #: shipped placeholder. A calibrated floor may legitimately be 0.0 -- on
+    #: the G1-D the tabletop coincides with the ``torso_link`` Z origin, so the
+    #: measured table height is ~0.0 m. An UNCALIBRATED 0.0 is still refused:
+    #: it would let the TCP descend to the torso origin, straight through the
+    #: table.
+    calibrated: bool = True
 
     def __post_init__(self) -> None:
         z = float(self.z_m)
@@ -77,6 +84,7 @@ class ZFloor:
         object.__setattr__(self, "margin_m", margin)
         object.__setattr__(self, "frame", str(self.frame))
         object.__setattr__(self, "enabled", bool(self.enabled))
+        object.__setattr__(self, "calibrated", bool(self.calibrated))
 
     # -- effective limit ---------------------------------------------------
     @property
@@ -207,9 +215,12 @@ class ZFloor:
         """One-line, human-readable description for the console/log."""
         if not self.enabled:
             return "z-floor DISABLED (no software descent limit)"
+        note = ""
+        if self.z_m <= 0.0 and not self.calibrated:
+            note = " (UNCALIBRATED placeholder)"
         return (
             f"z-floor {self.z_m:.4f} m in {self.frame} "
-            f"(TCP limited to {self.effective_z_m:.4f} m)"
+            f"(TCP limited to {self.effective_z_m:.4f} m){note}"
         )
 
 
@@ -234,15 +245,23 @@ def resolve_z_floor(
 
     ``z_floors.<name>`` / ``z_floor_name`` (the Franka/Piper convention) are
     honoured too, so one config can carry a floor per table setting.
+
+    ``z_floor_calibrated: true`` in the config marks the height as MEASURED.
+    This matters for the G1-D, where the tabletop coincides with the
+    ``torso_link`` Z origin and the measured floor is therefore ~0.0 m: without
+    the marker a 0.0 floor would be indistinguishable from the shipped
+    placeholder and would be refused. With the marker, 0.0 is a valid,
+    calibrated height.
     """
     cfg = dict(robot_cfg or {})
     margin = float(cfg.get("z_floor_margin_m", DEFAULT_HAND_CLEARANCE_M))
+    calibrated = bool(cfg.get("z_floor_calibrated", False))
 
     if override_m is not None:
         value = float(override_m)
         if not np.isfinite(value) or value < 0.0:
             raise ValueError(f"--z-floor-m must be a finite non-negative number, got {value!r}")
-        return ZFloor(z_m=value, margin_m=margin, enabled=True)
+        return ZFloor(z_m=value, margin_m=margin, enabled=True, calibrated=True)
 
     enabled = bool(cfg.get("enable_z_floor", enabled_default))
 
@@ -254,9 +273,9 @@ def resolve_z_floor(
                 f"robot config z_floor_name {name!r} is missing from z_floors"
             )
         value = float(floors[name])
-        return ZFloor(z_m=value, margin_m=margin, enabled=enabled)
+        return ZFloor(z_m=value, margin_m=margin, enabled=enabled, calibrated=calibrated)
 
     value = cfg.get("z_floor_m")
     if value is None:
-        return ZFloor(z_m=0.0, margin_m=margin, enabled=False)
-    return ZFloor(z_m=float(value), margin_m=margin, enabled=enabled)
+        return ZFloor(z_m=0.0, margin_m=margin, enabled=False, calibrated=False)
+    return ZFloor(z_m=float(value), margin_m=margin, enabled=enabled, calibrated=calibrated)

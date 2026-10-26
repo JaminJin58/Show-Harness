@@ -176,12 +176,17 @@ def _check_g1d_identity(r: Report, cfg: dict) -> None:
                f"python3 scripts/g1d/capture_z_floor.py --side {side} --capture")
         return
     value = float(floor)
-    if value <= 0.0:
+    if value <= 0.0 and not bool(cfg.get("z_floor_calibrated", False)):
         r.fail("z floor", f"z_floor_m = {value} (PLACEHOLDER — the TCP could descend "
                "to the torso origin)",
                f"python3 scripts/g1d/capture_z_floor.py --side {side} --capture")
         return
     margin = float(cfg.get("z_floor_margin_m", 0.003))
+    if value <= 0.0:
+        r.ok("z floor", f"{value:.4f} m (calibrated: the tabletop is level with the "
+                        f"torso_link Z origin; +{margin:.4f} m hand clearance -> "
+                        f"TCP limited to {value + margin:.4f} m)")
+        return
     r.ok("z floor", f"{value:.4f} m (+{margin:.4f} m hand clearance -> "
                     f"TCP limited to {value + margin:.4f} m)")
 

@@ -26,6 +26,25 @@ vlm_backends:
 """
 
 
+G1D = """\
+hardware: g1d
+robot:
+  side: left
+  bridge_namespace: lzh
+enable_z_floor: true
+z_floor_m: 0.0
+z_floor_calibrated: true
+z_floor_margin_m: 0.003
+primitives_config: __PRIMS__
+vlm_backend: local
+vlm: {base_url: http://localhost:8000/v1}
+vlm_backends:
+  local: {provider: vllm, base_url: http://localhost:8000/v1, model: m}
+"""
+
+PRIMS = str(Path(__file__).resolve().parents[1] / "configs" / "primitives_g1d.yaml")
+
+
 class CheckSetupTests(unittest.TestCase):
     def _run(self, cfg_text: str) -> tuple[int, str]:
         with tempfile.TemporaryDirectory() as d:
@@ -52,6 +71,19 @@ class CheckSetupTests(unittest.TestCase):
                                            "z_floors: {default: 0.0}"))
         self.assertEqual(code, 1, out)
         self.assertIn("placeholder", out)
+
+    def test_g1d_calibrated_zero_floor_passes(self) -> None:
+        code, out = self._run(G1D.replace("__PRIMS__", PRIMS))
+        self.assertEqual(code, 0, out)
+        self.assertIn("z floor", out)
+        self.assertNotIn("PLACEHOLDER", out)
+
+    def test_g1d_uncalibrated_zero_floor_fails(self) -> None:
+        code, out = self._run(
+            G1D.replace("__PRIMS__", PRIMS).replace("z_floor_calibrated: true\n", "")
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("PLACEHOLDER", out)
 
 
 if __name__ == "__main__":

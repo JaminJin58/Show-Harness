@@ -125,12 +125,18 @@ def main(argv: list[str] | None = None) -> int:
             "without one -- capture it with --capture and set z_floor_m."
         )
         return 1
-    if not math.isfinite(floor.z_m) or floor.z_m <= 0.0:
+    if not math.isfinite(floor.z_m) or (floor.z_m <= 0.0 and not floor.calibrated):
         print(
             f"  WARNING: z_floor_m = {floor.z_m} looks like a placeholder. "
             "Recapture it on YOUR table before a live run."
         )
         return 1
+    if floor.z_m <= 0.0:
+        print(
+            "  NOTE: z_floor_m = 0.0 is marked as CALIBRATED, so it is accepted as "
+            "the measured table height (the tabletop is level with the torso_link "
+            "Z origin)."
+        )
     return 0
 
 
